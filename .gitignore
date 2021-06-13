@@ -144,3 +144,10 @@ datasets/lm-bff
 *chinese_roberta_wwm_ext_L-12_H-768_A-12
 *weights
 *pretrained_models
+
+baselines/models_keras/pet/output/
+baselines/models_keras/pet/predict/
+
+*.svg
+
+baselines/models_pytorch/EFL/transformers/__pycache__/

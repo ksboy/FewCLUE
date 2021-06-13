@@ -6,6 +6,9 @@
 # rates from 1e-5, 2e-5, 3e-5 and batch sizes from 16, 32.
 # For small datasets (COPA, WSC, CB, RTE), we fine-tune
 # pretrained models for 20 epochs
+import os
+import pickle
+from keras.callbacks.callbacks import EarlyStopping
 import numpy as np
 from bert4keras.backend import keras, K
 from bert4keras.layers import Loss, Embedding
@@ -13,12 +16,12 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model, BERT
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
 import json
 from tqdm import tqdm
 import tensorflow as tf
-from tensorflow.python.ops import array_ops
+# from tensorflow.python.ops import array_ops
 
 import random
 import argparse
@@ -27,12 +30,14 @@ parser.add_argument("--train_set_index", "-t", help="training set index", type=s
 args = parser.parse_args()
 train_set_index = args.train_set_index
 
+output_dir = "./output/chid"
+
 maxlen = 256
-batch_size = 32
+batch_size = 16
 num_per_val_file = 42
 acc_list = []
 # 加载预训练模型
-base_model_path='/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/'
+base_model_path='/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/'
 config_path = base_model_path+'bert_config.json'
 checkpoint_path =  base_model_path+'bert_model.ckpt'
 dict_path = base_model_path+'vocab.txt'
@@ -48,7 +53,7 @@ def load_data(filename):
             #print("l:",l)
             sample=json.loads(l.strip())
             # print("json_string:",json_string)
-            answer = sample["answer"]
+            answer = sample["answer"] if 'answer' in sample else 1
             sentence = sample["content"]
             candidates = sample["candidates"]
             candidates_str = [label_dict[str(i+1)]+"：" + can +"，" for i, can in enumerate(candidates)]
@@ -84,11 +89,11 @@ def load_data(filename):
 #     return D
 
 # 加载数据集
-train_data = load_data('ready_data/chid/train_{}.json'.format(train_set_index))
+train_data = load_data('../../../datasets/chid/train_{}.json'.format(train_set_index))
 valid_data = []
 for i in range(5):
-    valid_data += load_data('ready_data/chid/dev_{}.json'.format(i))
-test_data = load_data('ready_data/chid/test_public.json')
+    valid_data += load_data('../../../datasets/chid/dev_{}.json'.format(i))
+test_data = load_data('../../../datasets/chid/test_public.json')
 
 # 模拟标注和非标注数据
 train_frac = 1 # 0.01  # 标注数据的比例
@@ -244,16 +249,18 @@ class Evaluator(keras.callbacks.Callback):
         self.best_val_acc = 0.
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('pet_tnews_model.weights')
+        model.save_weights(os.path.join(output_dir, 'model.weights'))
         val_pred_result = evaluate(valid_generator)
         val_pred_result = np.array(val_pred_result, dtype="int32")
         total_acc = val_pred_result.sum()/val_pred_result.shape[0]
         val_pred_result = val_pred_result.reshape(5, num_per_val_file).sum(1)/num_per_val_file
         # val_acc_mean = val_pred_result.mean() 准确率均值和total准确率相等
+        save_result = False
         if total_acc > self.best_val_acc:
             self.best_val_acc = total_acc
-            model.save_weights('pet_tnews_best_model.weights')
-        test_pred_result = np.array(evaluate(test_generator))
+            model.save_weights(os.path.join(output_dir, 'best_model.weights'))
+            save_result = True
+        test_pred_result = np.array(evaluate(test_generator, save_result))
         test_acc = test_pred_result.sum()/test_pred_result.shape[0]
         acc_tuple = tuple(val_pred_result.tolist()+[total_acc, self.best_val_acc, test_acc])
         acc_list.append(list(acc_tuple))
@@ -274,7 +281,7 @@ def draw_acc(acc_list):
     for idx, y in enumerate(acc_arr):
         ax.plot(x, y, label=label_list[idx])
     ax.legend()
-    plt.savefig("./baseline/models_keras/ptuning/output/ptuning_chid.svg") # 保存为svg格式图片，如果预览不了svg图片可以把文件后缀修改为'.png'
+    plt.savefig(os.path.join(output_dir, "ptuning_chid.svg")) # 保存为svg格式图片，如果预览不了svg图片可以把文件后缀修改为'.png'
 
 # # 对验证集进行验证
 # def chid_evaluate(data, candidates_num=7):
@@ -296,7 +303,7 @@ def draw_acc(acc_list):
 #     true_answer = true_arr.argmax(-1)
 #     return np.where(pred_answers==true_answer)[0].shape[0] / true_arr.shape[0]
 
-def evaluate(data):
+def evaluate(data, save_result=False):
     """
     计算候选标签列表中每一个标签（如'科技'）的联合概率，并与正确的标签做对比。候选标签的列表：['科技','娱乐','汽车',..,'农业']
     y_pred=(32, 2, 21128)=--->(32, 1, 14) = (batch_size, 1, label_size)---argmax--> (batch_size, 1, 1)=(batch_size, 1, index in the label)，批量得到联合概率分布最大的标签词语
@@ -306,6 +313,7 @@ def evaluate(data):
     label_ids = np.array([tokenizer.encode(l)[0][1:-1] for l in labels]) # 获得两个字的标签对应的词汇表的id列表，如: label_id=[1093, 689]。label_ids=[[1093, 689],[],[],..[]]tokenizer.encode('农业') = ([101, 1093, 689, 102], [0, 0, 0, 0])
     total, right = 0., 0.
     pred_result_list = []
+    result = []
     for x_true, _ in data:
         x_true, y_true = x_true[:2], x_true[2] # x_true = [batch_token_ids, batch_segment_ids]; y_true: batch_output_ids
         y_pred = model.predict(x_true)[:, mask_idxs] # 取出特定位置上的索引下的预测值。y_pred=[batch_size, 2, vocab_size]。mask_idxs = [7, 8]
@@ -313,25 +321,31 @@ def evaluate(data):
         # print("label_ids",label_ids) # [[4906 2825],[2031  727],[3749 6756],[3180 3952],[6568 5307],[3136 5509],[1744 7354],[2791  772],[4510 4993],[1092  752],[3125  752],[3152 1265],[ 860 5509],[1093  689]]
         y_pred = y_pred[:, 0, label_ids[:, 0]] # y_pred=[batch_size,1,label_size]=[32,1,14]。联合概率分布。 y_pred[:, 0, label_ids[:, 0]]的维度为：[32,1,21128]
         y_pred = y_pred.argmax(axis=1) # 找到概率最大的那个label(词)。如“财经”
+        result.extend(y_pred)
         # print("y_pred:",y_pred.shape,";y_pred:",y_pred) # O.K. y_pred: (16,) ;y_pred: [4 0 4 1 1 4 5 3 9 1 0 9]
         # print("y_true.shape:",y_true.shape,";y_true:",y_true) # y_true: (16, 128)
         y_true = np.array([labels.index(tokenizer.decode(y)) for y in y_true[:, mask_idxs]])
         total += len(y_true)
+        print(y_true)
         # right += (y_true == y_pred).sum()
         pred_result_list += (y_true == y_pred).tolist()
     # return right / total
+    if save_result:
+        output = open(os.path.join(output_dir, 'predict.pkl'), 'wb')
+        pickle.dump(result, output , -1)
     return pred_result_list
 
 
 if __name__ == '__main__':
 
     evaluator = Evaluator()
+    earlystop = EarlyStopping(monitor='accuracy', patience=3, mode='max')
 
     train_model.fit_generator(
         train_generator.forfit(),
         steps_per_epoch=len(train_generator) * 50,
         epochs=20,
-        callbacks=[evaluator]
+        callbacks=[evaluator, earlystop]
     )
 
 else:

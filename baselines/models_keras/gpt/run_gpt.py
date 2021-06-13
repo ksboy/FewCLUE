@@ -34,9 +34,9 @@ zero_shot = args.zero_shot    # 是否进行零样本学习
 # task_name = TaskName.IFLYTEK
 # task_name = TaskName.WSC
 # task_name = TaskName.CSL
-# task_name = TaskName.CHID
+task_name = TaskName.CHID
 #
-# zero_shot = True    # 是否进行零样本学习
+zero_shot = True    # 是否进行零样本学习
 
 # 获取任务数据集
 data_gen = DataGen(task_name, zero_shot)

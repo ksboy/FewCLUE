@@ -9,12 +9,14 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
-import json
+from keras.callbacks.callbacks import EarlyStopping
+
+import pickle
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import argparse
 parser = argparse.ArgumentParser(description="training set index")
 parser.add_argument("--train_set_index", "-ti", help="training set index", type=str, default="0")
@@ -24,6 +26,8 @@ args = parser.parse_args()
 train_set_index = args.train_set_index
 training_type = args.training_type
 
+output_dir = "output/csl"
+
 # 模板
 # input_str_format = "{}，黴鹹{}几点内容" # 黴鹹：生僻字组合会被替换为 强调 or 提到，方便寻找mask index [7957, 7919]
 input_str_format = "黴鹹用{}概括{}" # 黴鹹：生僻字组合会被替换为 不能 or 可以，方便寻找mask index [7957, 7919]
@@ -32,13 +36,13 @@ label2words = {"0": "不能", "1":"可以"}
 
 num_classes = 2
 maxlen = 256
-batch_size = 16
-num_per_val_file = 45
+batch_size = 6
+num_per_val_file = 32
 acc_list = []
 
-config_path = '/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/bert_config.json'
-checkpoint_path = '/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/bert_model.ckpt'
-dict_path = '/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/vocab.txt'
+config_path = '/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/bert_config.json'
+checkpoint_path = '/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/bert_model.ckpt'
+dict_path = '/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/vocab.txt'
 # 建立分词器
 tokenizer = Tokenizer(dict_path, do_lower_case=True)
 def load_data(filename): # 加载数据
@@ -60,16 +64,16 @@ def load_data(filename): # 加载数据
             
             mask_idxs = [idx for idx, c in enumerate(content_ids) if c ==  7957 and content_ids[idx+1] == 7919]
             mask_idxs.append(mask_idxs[0]+1)
-            label = l["label"]
+            label = l["label"] if 'label' in l else '0'
             D.append(((content, content_ids, segment_ids), label2words[label], mask_idxs))
     return D
 
 # 加载数据集，只截取一部分，模拟小数据集
-train_data = load_data('ready_data/csl/train_{}.json'.format(train_set_index))
+train_data = load_data('../../../datasets/csl/train_{}.json'.format(train_set_index))
 valid_data = []
 for i in range(5):
-    valid_data += load_data('ready_data/csl/dev_{}.json'.format(i))
-test_data = load_data('ready_data/csl/test_public.json')
+    valid_data += load_data('../../../datasets/csl/dev_{}.json'.format(i))
+test_data = load_data('../../../datasets/csl/test.json')
 
 # 模拟标注和非标注数据
 train_frac = 1 # 标注数据的比例
@@ -177,16 +181,18 @@ class Evaluator(keras.callbacks.Callback):
         self.best_val_acc = 0.
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('pet_tnews_model.weights')
+        model.save_weights(os.path.join(output_dir, 'model.weights'))
         val_pred_result = evaluate(valid_generator)
         val_pred_result = np.array(val_pred_result, dtype="int32")
         total_acc = val_pred_result.sum()/val_pred_result.shape[0]
         val_pred_result = val_pred_result.reshape(5, num_per_val_file).sum(1)/num_per_val_file
         # val_acc_mean = val_pred_result.mean() 准确率均值和total准确率相等
+        save_result = False
         if total_acc > self.best_val_acc:
             self.best_val_acc = total_acc
-            model.save_weights('pet_tnews_best_model.weights')
-        test_pred_result = np.array(evaluate(test_generator))
+            model.save_weights(os.path.join(output_dir, 'best_model.weights'))
+            save_result = True
+        test_pred_result = np.array(evaluate(test_generator, save_result))
         test_acc = test_pred_result.sum()/test_pred_result.shape[0]
         acc_tuple = tuple(val_pred_result.tolist()+[total_acc, self.best_val_acc, test_acc])
         acc_list.append(list(acc_tuple))
@@ -196,7 +202,7 @@ class Evaluator(keras.callbacks.Callback):
             acc_tuple
         )
 
-def evaluate(data):
+def evaluate(data, save_result=False):
     """
     计算候选标签列表中每一个标签（如'科技'）的联合概率，并与正确的标签做对比。候选标签的列表：['科技','娱乐','汽车',..,'农业']
     y_pred=(32, 2, 21128)=--->(32, 1, 14) = (batch_size, 1, label_size)---argmax--> (batch_size, 1, 1)=(batch_size, 1, index in the label)，批量得到联合概率分布最大的标签词语
@@ -206,6 +212,7 @@ def evaluate(data):
     pred_result_list = []
     label_ids = np.array([tokenizer.encode(l)[0][1:-1] for l in labels]) # 获得两个字的标签对应的词汇表的id列表，如: label_id=[1093, 689]。label_ids=[[1093, 689],[],[],..[]]tokenizer.encode('农业') = ([101, 1093, 689, 102], [0, 0, 0, 0])
     total, right = 0., 0.
+    result = []
     for x_true, _ in data:
         x_true, y_true = x_true[:2], x_true[2] # x_true = [batch_token_ids, batch_segment_ids]; y_true: batch_output_ids
         mask_idxs = np.where(x_true[0] == tokenizer._token_mask_id)[1].reshape(y_true.shape[0], 2)
@@ -218,11 +225,16 @@ def evaluate(data):
         # print("label_ids",label_ids) # [[4906 2825],[2031  727],[3749 6756],[3180 3952],[6568 5307],[3136 5509],[1744 7354],[2791  772],[4510 4993],[1092  752],[3125  752],[3152 1265],[ 860 5509],[1093  689]]
         y_pred = y_pred[:, 0, label_ids[:, 0]] * y_pred[:, 1, label_ids[:, 1]] # y_pred=[batch_size,1,label_size]=[32,1,14]。联合概率分布。 y_pred[:, 0, label_ids[:, 0]]的维度为：[32,1,21128]
         y_pred = y_pred.argmax(axis=1) # 找到概率最大的那个label(词)。如“财经”
+        result.extend(y_pred)
         # print("y_pred:",y_pred.shape,";y_pred:",y_pred) # O.K. y_pred: (16,) ;y_pred: [4 0 4 1 1 4 5 3 9 1 0 9]
         # print("y_true.shape:",y_true.shape,";y_true:",y_true) # y_true: (16, 128)
         y_true = np.array([labels.index(tokenizer.decode(y)) for y in y_true])
+        print(y_true)
         total += len(y_true)
         pred_result_list += (y_true == y_pred).tolist()
+    if save_result:
+        output = open(os.path.join(output_dir, 'predict.pkl'), 'wb')
+        pickle.dump(result, output , -1)
     return pred_result_list
 
 def draw_acc(acc_list):
@@ -237,27 +249,35 @@ def draw_acc(acc_list):
     for idx, y in enumerate(acc_arr):
         ax.plot(x, y, label=label_list[idx])
     ax.legend()
-    plt.savefig("./baseline/tnews/pet_csl.svg") # 保存为svg格式图片，如果预览不了svg图片可以把文件后缀修改为'.png'
+    plt.savefig(os.path.join(output_dir, "pet_csl.svg")) # 保存为svg格式图片，如果预览不了svg图片可以把文件后缀修改为'.png'
 
 
 if __name__ == '__main__':
 
     if training_type == "few-shot":
         evaluator = Evaluator()
+        earlystop = EarlyStopping(monitor='accuracy', patience=3, mode='max')
 
         train_model.fit_generator(
             train_generator.forfit(),
             steps_per_epoch=len(train_generator),
             epochs=20,
-            callbacks=[evaluator]
+            callbacks=[evaluator, earlystop]
         )
     elif training_type == "zero-shot":
         pred_result = evaluate(test_generator)
         pred_result = np.array(pred_result, dtype="int32")
         test_acc = pred_result.sum()/pred_result.shape[0]
         print("zero-shot结果: {}".format(test_acc))
-    else:
-        print("未知的训练类型")
+    elif training_type == "predict":
+        val_data = load_data('../../../datasets/csl/dev_0.json')
+        test_data = load_data('../../../datasets/csl/test.json')
+        val_generator = data_generator(val_data, batch_size)
+        test_generator = data_generator(test_data, batch_size)
+        model.load_weights(os.path.join(output_dir, 'best_model.weights'))
+        test_acc = evaluate(val_generator, save_result=False)
+        test_acc = evaluate(test_generator, save_result=True)
+
 else:
 
-    model.load_weights('pet_tnews_best_model.weights')
+    model.load_weights(os.path.join(output_dir, 'best_model.weights'))

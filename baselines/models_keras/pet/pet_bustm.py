@@ -1,5 +1,6 @@
 #! -*- coding:utf-8 -*-
 # 情感分析例子，利用MLM做 Zero-Shot/Few-Shot/Semi-Supervised Learning
+import pickle
 
 import numpy as np
 from bert4keras.backend import keras, K
@@ -8,8 +9,9 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# # from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
+from keras.callbacks.callbacks import EarlyStopping
 import json
 import random
 import re
@@ -24,11 +26,13 @@ args = parser.parse_args()
 train_set_index = args.train_set_index
 training_type = args.training_type
 
+output_dir = "./output/bustm"
+
 # num_classes = 2
 maxlen = 256
 batch_size = 8
 
-base_model_path='/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/'
+base_model_path='/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/'
 config_path = base_model_path+'bert_config.json'
 checkpoint_path =  base_model_path+'bert_model.ckpt'
 dict_path = base_model_path+'vocab.txt'
@@ -43,7 +47,7 @@ def load_data(filename):
             # print("json_string:",json_string)
             sentence1=json_string['sentence1']
             sentence2=json_string['sentence2']
-            label=json_string['label']
+            label=json_string['label'] if 'label' in json_string else '0'
             text=sentence1+"和"+sentence2+"意思锟同"
             _mask = get_mask_idx(text, "锟")
             #text, label = l.strip().split('\t')
@@ -72,9 +76,9 @@ def get_mask_idx(text, mask_words):
     return [m-offset for m in _mask]
 
 # 加载数据集
-train_data = load_data('datasets/bustm/train_0.json')
-valid_data = load_data('datasets/bustm/dev_few_all.json')
-test_data = load_data('datasets/bustm/test_public.json')
+train_data = load_data('../../../datasets/bustm/train_0.json')
+valid_data = load_data('../../../datasets/bustm/dev_few_all.json')
+test_data = load_data('../../../datasets/bustm/test.json')
 
 # 模拟标注和非标注数据
 train_frac = 1 # TODO 0.01  # 标注数据的比例
@@ -189,18 +193,19 @@ train_generator = data_generator(train_data, batch_size)
 valid_generator = data_generator(valid_data, batch_size)
 test_generator = data_generator(test_data, batch_size)
 
-
 class Evaluator(keras.callbacks.Callback):
     def __init__(self):
         self.best_val_acc = 0.
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('mlm_model_pet_sentencepair.weights')
+        model.save_weights(os.path.join(output_dir, 'model.weights'))
         val_acc = evaluate(valid_generator)
+        save_result = False
         if val_acc > self.best_val_acc: # #  保存最好的模型，并记录最好的准确率
+            save_result = True
             self.best_val_acc = val_acc
-            model.save_weights('best_model_pet_sentencepair.weights')
-        test_acc = evaluate(test_generator)
+            model.save_weights(os.path.join(output_dir, 'best_model.weights'))
+        test_acc = evaluate(test_generator, save_result)
         print(
             u'val_acc: %.5f, best_val_acc: %.5f, test_acc: %.5f\n' %
             (val_acc, self.best_val_acc, test_acc)
@@ -221,17 +226,25 @@ def check_two_list(list_true, list_predict):
     return num_right_
 
 # 对验证集进行验证
-def evaluate(data):
+def evaluate(data, save_result=False):
     total, right = 0., 0.
+    result = []
     for x_true, _ in data:
         x_true, y_true = x_true[:2], x_true[2]
         y_pred = model.predict(x_true)
         mask_idx = np.where(x_true[0]==tokenizer._token_mask_id)[1].reshape(x_true[0].shape[0],1)
         y_pred = [pred[mask, label_tokenid_list] for pred, mask in zip(y_pred, mask_idx)]
         y_pred = [(pred[:,0]*1).argmax() for pred in y_pred]
+        result.extend(y_pred)
         y_true = [label_tokenid_list.index(tuple(y[mask])) for mask, y in zip(mask_idx, y_true)]
+        # print(y_true)
         total += len(y_true)
         right += np.where(np.array(y_pred)==np.array(y_true))[0].shape[0]  # (y_true == y_pred).sum()
+    if save_result:
+        # label index 反了
+        # for i in range(len(result)): result[i] = 1 - result[i]
+        output = open(os.path.join(output_dir, 'predict.pkl'), 'wb')
+        pickle.dump(result, output , -1)
     return right / total
 
 
@@ -239,18 +252,26 @@ if __name__ == '__main__':
 
     if training_type == "few-shot":
         evaluator = Evaluator()
+        earlystop = EarlyStopping(monitor='accuracy', patience=3, mode='max')
 
         train_model.fit_generator(
             train_generator.forfit(),
             steps_per_epoch=len(train_generator),
             epochs=20,
-            callbacks=[evaluator]
+            callbacks=[evaluator, earlystop]
         )
     elif training_type == "zero-shot":
         test_acc = evaluate(test_generator)
         print("zero-shot结果: {}".format(test_acc))
-    else:
-        print("未知的训练类型")
+    elif training_type == "predict":
+        val_data = load_data('../../../datasets/bustm/dev_0.json')
+        test_data = load_data('../../../datasets/bustm/test.json')
+        val_generator = data_generator(val_data, batch_size)
+        test_generator = data_generator(test_data, batch_size)
+        model.load_weights(os.path.join(output_dir, 'best_model.weights'))
+        test_acc = evaluate(val_generator, save_result=False)
+        test_acc = evaluate(test_generator, save_result=True)
 
 else:
-    model.load_weights('best_model_pet_sentencepair.weights')
+    model.load_weights(os.path.join(output_dir, 'best_model.weights'))
+    test_acc = evaluate(test_generator)

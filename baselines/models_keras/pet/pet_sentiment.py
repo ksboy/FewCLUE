@@ -10,7 +10,7 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
 
 # num_classes = 2
@@ -39,7 +39,7 @@ def load_data(filename):
     return D
 
 
-path = '../data/FewCLUEDatasets-master/ready_data/cecmmnt'
+path = '../data/FewCLUEDatasets-master../../../datasets/cecmmnt'
 save_path = '../output/cecmmnt/'
 if not os.path.exists(save_path):
     os.mkdir(save_path)
@@ -52,7 +52,7 @@ for i in range(5):
     valid_data = load_data('{}/dev_{}.json'.format(path,str(i)))
     valid_datas.append(valid_data)
 
-test_data = load_data('{}/test_public.json'.format(path))
+test_data = load_data('{}/test.json'.format(path))
 
 # 模拟标注和非标注数据
 train_frac = 1 # TODO 0.01  # 标注数据的比例

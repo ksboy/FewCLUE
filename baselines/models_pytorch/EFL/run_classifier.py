@@ -224,6 +224,7 @@ def evaluate(args, model, tokenizer, prefix=""):
                 out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
             pbar(step)
         print(' ')
+        print(out_label_ids)
         if 'cuda' in str(args.device):
             torch.cuda.empty_cache()
         eval_loss = eval_loss / nb_eval_steps
@@ -278,6 +279,7 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                     inputs['token_type_ids'] = batch[2] if (
                             'bert' in args.model_type or 'xlnet' in args.model_type) else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
                 outputs = model(**inputs)
+                print(batch[3])
                 _, logits = outputs[:2]
             nb_pred_steps += 1
             if preds is None:

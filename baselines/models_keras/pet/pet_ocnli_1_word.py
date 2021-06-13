@@ -9,7 +9,7 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
 import json
 import random
@@ -46,7 +46,7 @@ def load_data(filename):
             D.append((text, int(label)))
     return D
 
-path = '../data/FewCLUEDatasets-master/ready_data/ocnli/'
+path = '../data/FewCLUEDatasets-master../../../datasets/ocnli/'
 save_path = '../output/ocnli/'
 if not os.path.exists(save_path):
     os.mkdir(save_path)
@@ -58,7 +58,7 @@ valid_datas = []
 for i in range(5):
     valid_data = load_data('{}/dev_{}.json'.format(path,str(i)))
     valid_datas.append(valid_data)
-test_data = load_data('{}/test_public.json'.format(path))
+test_data = load_data('{}/test.json'.format(path))
 
 # 模拟标注和非标注数据
 train_frac = 1 # TODO 0.01  # 标注数据的比例
@@ -189,14 +189,14 @@ class Evaluator(keras.callbacks.Callback):
         self.best_val_acc = 0.
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('mlm_model_pet_sentencepair.weights')
+        model.save_weights(os.path.join(output_dir, 'model.weights'))
         val_accs = 0
         for valid_generator in valid_generators:
             val_accs += evaluate(valid_generator)
         val_acc = val_accs / 5
         if val_acc > self.best_val_acc: # #  保存最好的模型，并记录最好的准确率
             self.best_val_acc = val_acc
-            model.save_weights('best_model_pet_sentencepair.weights')
+            model.save_weights(os.path.join(output_dir, 'best_model.weights'))
         test_acc = evaluate(test_generator)
         print(
             u'val_acc: %.5f, best_val_acc: %.5f, test_acc: %.5f\n' %
@@ -252,4 +252,4 @@ if __name__ == '__main__':
     )
 
 else:
-    model.load_weights('best_model_pet_sentencepair.weights')
+    model.load_weights(os.path.join(output_dir, 'best_model.weights'))

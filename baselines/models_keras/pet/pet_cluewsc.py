@@ -9,7 +9,7 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
 import json
 import pdb
@@ -24,9 +24,9 @@ labels_en=[label_en for label_en,label_zh in label_en2zh.items()]
 
 maxlen = 128
 batch_size = 16
-config_path = '/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/bert_config.json'
-checkpoint_path = '/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/bert_model.ckpt'
-dict_path = '/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/vocab.txt'
+config_path = '/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/bert_config.json'
+checkpoint_path = '/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/bert_model.ckpt'
+dict_path = '/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/vocab.txt'
 
 # {"target": {"span1_index": 0, "span1_text": "乔", "span2_index": 21, "span2_text": "他"}, "idx": 32, "text": "乔的叔叔仍然可以在网球上击败他，即便他年长他30岁。", "label": "true"}
 def load_data(filename): # 加载数据
@@ -52,9 +52,9 @@ def load_data(filename): # 加载数据
     return D
 
 # 加载数据集，只截取一部分，模拟小数据集
-train_data = load_data('./ready_data/cluewsc/train_0.json')
-valid_data = load_data('./ready_data/cluewsc/dev_0.json')
-test_data = load_data('./ready_data/cluewsc/test_public.json')
+train_data = load_data('.../../../datasets/cluewsc/train_0.json')
+valid_data = load_data('.../../../datasets/cluewsc/dev_0.json')
+test_data = load_data('.../../../datasets/cluewsc/test.json')
 
 # 模拟标注和非标注数据
 train_frac = 1 # 标注数据的比例

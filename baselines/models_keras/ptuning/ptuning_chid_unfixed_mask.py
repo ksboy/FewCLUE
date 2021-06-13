@@ -13,13 +13,16 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model, BERT
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
+from keras.callbacks.callbacks import EarlyStopping
+import pickle
 import json
 from tqdm import tqdm
 import tensorflow as tf
-from tensorflow.python.ops import array_ops
+# from tensorflow.python.ops import array_ops
 import re
+import os
 
 import random
 import argparse
@@ -28,12 +31,14 @@ parser.add_argument("--train_set_index", "-t", help="training set index", type=s
 args = parser.parse_args()
 train_set_index = args.train_set_index
 
+output_dir = "./output/chid_unfixed"
+
 maxlen = 256
 batch_size = 32
 num_per_val_file = 42
 acc_list = []
 # 加载预训练模型
-base_model_path='/path/language_model/chinese_roberta_wwm_ext_L-12_H-768_A-12/'
+base_model_path='/hy-nas/workspace/pretrained_models/chinese_roberta_wwm_large_ext_L-24_H-1024_A-16/'
 config_path = base_model_path+'bert_config.json'
 checkpoint_path =  base_model_path+'bert_model.ckpt'
 dict_path = base_model_path+'vocab.txt'
@@ -46,7 +51,7 @@ def load_data(filename):
     with open(filename, encoding='utf-8') as f:
         for idx,l in enumerate(f):
             sample=json.loads(l.strip().replace(" ", "").replace("\t", ""))
-            answer = int(sample["answer"])
+            answer = int(sample["answer"]) if 'answer' in sample else 1
             sentence1 = sample["content"].replace("#idiom#", "锟斤烤烫") # 替换为生僻词确保输入中没有答案
             _mask = get_mask_idx(sentence1, "锟斤烤烫")
             assert len(_mask) == 4
@@ -89,11 +94,11 @@ def get_mask_idx(text, mask_words):
 #     return D
 
 # 加载数据集
-train_data = load_data('ready_data/chid/train_{}.json'.format(train_set_index))
+train_data = load_data('../../../datasets/chid/train_{}.json'.format(train_set_index))
 valid_data = []
 for i in range(5):
-    valid_data += load_data('ready_data/chid/dev_{}.json'.format(i))
-test_data = load_data('ready_data/chid/test_public.json')
+    valid_data += load_data('../../../datasets/chid/dev_{}.json'.format(i))
+test_data = load_data('../../../datasets/chid/test_public.json')
 
 # 模拟标注和非标注数据
 train_frac = 1 # 0.01  # 标注数据的比例
@@ -257,16 +262,18 @@ class Evaluator(keras.callbacks.Callback):
         self.best_val_acc = 0.
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('pet_tnews_model.weights')
+        model.save_weights(os.path.join(output_dir, 'model.weights'))
         val_pred_result = evaluate(valid_generator, val_type="val")
         val_pred_result = np.array(val_pred_result, dtype="int32")
         total_acc = val_pred_result.sum()/val_pred_result.shape[0]
         val_pred_result = val_pred_result.reshape(5, num_per_val_file).sum(1)/num_per_val_file
         # val_acc_mean = val_pred_result.mean() 准确率均值和total准确率相等
+        save_result = False
         if total_acc > self.best_val_acc:
             self.best_val_acc = total_acc
-            model.save_weights('pet_tnews_best_model.weights')
-        test_pred_result = np.array(evaluate(test_generator, val_type="test"))
+            model.save_weights(os.path.join(output_dir, 'best_model.weights'))
+            save_result = True
+        test_pred_result = np.array(evaluate(test_generator, val_type="test", save_result=save_result))
         test_acc = test_pred_result.sum()/test_pred_result.shape[0]
         acc_tuple = tuple(val_pred_result.tolist()+[total_acc, self.best_val_acc, test_acc])
         acc_list.append(list(acc_tuple))
@@ -288,7 +295,7 @@ def draw_acc(acc_list):
     for idx, y in enumerate(acc_arr):
         ax.plot(x, y, label=label_list[idx])
     ax.legend()
-    plt.savefig("ptuning_chid.svg") # 保存为svg格式图片，如果预览不了svg图片可以把文件后缀修改为'.png'
+    plt.savefig(os.path.join(output_dir, "ptuning_chid.svg")) # 保存为svg格式图片，如果预览不了svg图片可以把文件后缀修改为'.png'
 
 # # 对验证集进行验证
 # def chid_evaluate(data, candidates_num=7):
@@ -311,7 +318,7 @@ def draw_acc(acc_list):
 #     return np.where(pred_answers==true_answer)[0].shape[0] / true_arr.shape[0]
 
 
-def evaluate(data, val_type="val"):
+def evaluate(data, val_type="val", save_result=False):
     """
     计算候选成语列表中每一个成语（如'狐假虎威'）的联合概率，并与正确的标签做对比。每一个样本存在不同的候选成语的列表。
     :param data:
@@ -326,6 +333,7 @@ def evaluate(data, val_type="val"):
         labels_list = test_labels_list
     else:
         raise ValueError('选择正确的数据集类型')
+    result = []
     for idx, X in tqdm(enumerate(data), desc="{}数据集验证中".format(val_type)):
         label_ids = np.array([[np.array([l for l in label])] for label in labels_list[batch_size*idx: batch_size*(idx+1)]])
         tmp_size = label_ids.shape[0]
@@ -339,10 +347,15 @@ def evaluate(data, val_type="val"):
         y_pred = [y_pred[i, 0, label_ids[i, :, 0]] * y_pred[i, 1, label_ids[i, :, 1]]* y_pred[i, 2, label_ids[i, :, 2]]* y_pred[i, 3, label_ids[i, :, 3]] for i in range(tmp_size)]
         y_pred = np.array(y_pred)
         y_pred = y_pred.argmax(axis=1)
+        result.extend(y_pred)
         true_list = [labels_list[idx*batch_size+i].index(tuple(y[mask_idxs[i]])) for i, y in enumerate(y_true)]
         y_true = np.array(true_list)
+        print(y_true)
         total += len(y_true)
         pred_result_list += (y_true == y_pred).tolist()
+    if save_result:
+        output = open(os.path.join(output_dir, 'predict.pkl'), 'wb')
+        pickle.dump(result, output , -1)
     return pred_result_list
 # def evaluate(data):
 #     """
@@ -374,12 +387,13 @@ def evaluate(data, val_type="val"):
 if __name__ == '__main__':
 
     evaluator = Evaluator()
+    earlystop = EarlyStopping(monitor='accuracy', patience=3, mode='max')
 
     train_model.fit_generator(
         train_generator.forfit(),
         steps_per_epoch=len(train_generator) * 50,
         epochs=20,
-        callbacks=[evaluator]
+        callbacks=[evaluator, earlystop]
     )
 
 else:

@@ -8,7 +8,7 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
 import json
 import random
@@ -64,7 +64,7 @@ def load_data(filename):
 # 加载数据集
 train_data = load_data(os.path.join(dataset_dir, 'train_32.json'))
 valid_data = load_data(os.path.join(dataset_dir, 'dev_32.json'))
-test_data = load_data(os.path.join(dataset_dir, 'test_public.json'))
+test_data = load_data(os.path.join(dataset_dir, 'test.json'))
 
 # 模拟标注和非标注数据
 train_frac = 1 #

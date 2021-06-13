@@ -9,7 +9,7 @@ from bert4keras.tokenizers import Tokenizer
 from bert4keras.models import build_transformer_model
 from bert4keras.optimizers import Adam
 from bert4keras.snippets import sequence_padding, DataGenerator
-from bert4keras.snippets import open
+# from bert4keras.snippets import open
 from keras.layers import Lambda, Dense
 import json
 
@@ -38,9 +38,9 @@ def load_data(filename): # 加载数据
     return D
 
 # 加载数据集，只截取一部分，模拟小数据集
-train_data = load_data('datasets/tnews/train_32.json')
-valid_data = load_data('datasets/tnews/dev_32.json')
-test_data = load_data('datasets/tnews/test_public.json')
+train_data = load_data('../../../datasets/tnews/train_32.json')
+valid_data = load_data('../../../datasets/tnews/dev_32.json')
+test_data = load_data('../../../datasets/tnews/test.json')
 
 # 模拟标注和非标注数据
 train_frac = 1 # 标注数据的比例
@@ -150,11 +150,11 @@ class Evaluator(keras.callbacks.Callback):
         self.best_val_acc = 0.
 
     def on_epoch_end(self, epoch, logs=None):
-        model.save_weights('pet_tnews_model.weights')
+        model.save_weights(os.path.join(output_dir, 'model.weights'))
         val_acc = evaluate(valid_generator)
         if val_acc > self.best_val_acc:
             self.best_val_acc = val_acc
-            model.save_weights('pet_tnews_best_model.weights')
+            model.save_weights(os.path.join(output_dir, 'best_model.weights'))
         test_acc = evaluate(test_generator)
         print(
             u'val_acc: %.5f, best_val_acc: %.5f, test_acc: %.5f\n' %
@@ -197,4 +197,4 @@ if __name__ == '__main__':
     )
 else:
 
-    model.load_weights('pet_tnews_best_model.weights')
+    model.load_weights(os.path.join(output_dir, 'best_model.weights'))
